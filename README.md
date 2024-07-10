@@ -1,9 +1,9 @@
-# Zero to MLHub with Kubernetes
+# Zero to MLRecipes with Kubernetes
 
-This repo contains a *Helm chart* for [MLHub](https://github.com/khulnasoft/ml-recipes) and a guide to use it. Together,
+This repo contains a *Helm chart* for [MLRecipes](https://github.com/khulnasoft/ml-recipes) and a guide to use it. Together,
 they allow you to make a JupyterHub available to a very large group of users such as the staff and students of a university.
 
-## MLHub Modifications
+## MLRecipes Modifications
 
 In this repo, we made some modifications to the forked repo and its helm chart and default values so that it works with the [ml-recipes](https://github.com/khulnasoft/ml-recipes) and [ml-station](https://github.com/khulnasoft/ml-station) images. Hence, we do not use the hub or singleuser-sample image in the images/ directory.
 For most parts you should be able to follow the comprehensive guide linked below.
@@ -14,9 +14,9 @@ Most prominent changes:
 - changes of default values, e.g. the used images
 - changes of paths, e.g. the ssl secret mount path
 
-We do not push the helm chart to a repository for now, so feel free to download it from the [mlhub releases page](https://github.com/khulnasoft/ml-recipes/releases) or to create the package yourself via `helm package jupyterhub/`.
+We do not push the helm chart to a repository for now, so feel free to download it from the [mlrecipes releases page](https://github.com/khulnasoft/ml-recipes/releases) or to create the package yourself via `helm package jupyterhub/`.
 
-You can then deploy the chart via `helm upgrade --install mlhub packaged-chart.tgz --namespace $namespace --values config.yaml`.
+You can then deploy the chart via `helm upgrade --install mlrecipes packaged-chart.tgz --namespace $namespace --values config.yaml`.
 The config.yaml can be used to overrride default values.
 
 ---
