@@ -2,13 +2,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "jupyterhub.user-scheduler-deploy.fullname" . }}
+  name: user-scheduler
   labels:
     {{- include "jupyterhub.labels" . | nindent 4 }}
 spec:
-  {{- if not (typeIs "<nil>" .Values.scheduling.userScheduler.revisionHistoryLimit) }}
-  revisionHistoryLimit: {{ .Values.scheduling.userScheduler.revisionHistoryLimit }}
-  {{- end }}
   replicas: {{ .Values.scheduling.userScheduler.replicas }}
   selector:
     matchLabels:
@@ -16,77 +13,41 @@ spec:
   template:
     metadata:
       labels:
+        {{- /* Changes here will cause the Deployment to restart the pods. */}}
         {{- include "jupyterhub.matchLabels" . | nindent 8 }}
-        {{- with .Values.scheduling.userScheduler.labels }}
-        {{- . | toYaml | nindent 8 }}
-        {{- end }}
       annotations:
+        # This lets us autorestart when the configmap changes!
         checksum/config-map: {{ include (print $.Template.BasePath "/scheduling/user-scheduler/configmap.yaml") . | sha256sum }}
-        {{- with .Values.scheduling.userScheduler.annotations }}
-        {{- . | toYaml | nindent 8 }}
-        {{- end }}
     spec:
-      {{ with include "jupyterhub.user-scheduler-serviceaccount.fullname" . }}
-      serviceAccountName: {{ . }}
+      {{- if .Values.rbac.enabled }}
+      serviceAccountName: user-scheduler
       {{- end }}
       {{- if .Values.scheduling.podPriority.enabled }}
-      priorityClassName: {{ include "jupyterhub.priority.fullname" . }}
+      priorityClassName: {{ .Release.Name }}-default-priority
       {{- end }}
-      {{- with .Values.scheduling.userScheduler.nodeSelector }}
-      nodeSelector:
-        {{- . | toYaml | nindent 8 }}
-      {{- end }}
-      {{- with concat .Values.scheduling.corePods.tolerations .Values.scheduling.userScheduler.tolerations }}
-      tolerations:
-        {{- . | toYaml | nindent 8 }}
-      {{- end }}
+      nodeSelector: {{ toJson .Values.scheduling.userScheduler.nodeSelector }}
       {{- include "jupyterhub.coreAffinity" . | nindent 6 }}
-      volumes:
-        - name: config
-          configMap:
-            name: {{ include "jupyterhub.user-scheduler-deploy.fullname" . }}
-      {{- with include "jupyterhub.imagePullSecrets" (dict "root" . "image" .Values.scheduling.userScheduler.image) }}
-      imagePullSecrets: {{ . }}
-      {{- end }}
       containers:
-        - name: kube-scheduler
-          image: {{ .Values.scheduling.userScheduler.image.name }}:{{ .Values.scheduling.userScheduler.image.tag }}
-          {{- with .Values.scheduling.userScheduler.image.pullPolicy }}
-          imagePullPolicy: {{ . }}
-          {{- end }}
+        - name: user-scheduler
+          image: {{ include "jupyterhub.scheduler.image" . }}
           command:
             - /usr/local/bin/kube-scheduler
-            # NOTE: --authentication-skip-lookup=true is used to avoid a
-            #       seemingly harmless error, if we need to not skip
-            #       "authentication lookup" in the future, see the linked issue.
-            #
-            # ref: https://github.com/jupyterhub/zero-to-jupyterhub-k8s/issues/1894
-            - --config=/etc/user-scheduler/config.yaml
-            - --authentication-skip-lookup=true
-            - --v={{ .Values.scheduling.userScheduler.logLevel }}
-          volumeMounts:
-            - mountPath: /etc/user-scheduler
-              name: config
+            - --scheduler-name={{ .Release.Name }}-user-scheduler
+            - --policy-configmap=user-scheduler
+            - --policy-configmap-namespace={{ .Release.Namespace }}
+            - --lock-object-name=user-scheduler
+            - --lock-object-namespace={{ .Release.Namespace }}
+            - --leader-elect-resource-lock=configmaps
+            - --v={{ .Values.scheduling.userScheduler.logLevel | default 4 }}
           livenessProbe:
             httpGet:
               path: /healthz
-              scheme: HTTPS
-              port: 10259
+              port: 10251
             initialDelaySeconds: 15
           readinessProbe:
             httpGet:
               path: /healthz
-              scheme: HTTPS
-              port: 10259
-          {{- with .Values.scheduling.userScheduler.resources }}
+              port: 10251
           resources:
-            {{- . | toYaml | nindent 12 }}
-          {{- end }}
-          {{- with .Values.scheduling.userScheduler.containerSecurityContext }}
-          securityContext:
-            {{- . | toYaml | nindent 12 }}
-          {{- end }}
-      {{- with .Values.scheduling.userScheduler.extraPodSpec }}
-      {{- . | toYaml | nindent 6 }}
-      {{- end }}
+            {{- .Values.scheduling.userScheduler.resources | toYaml | trimSuffix "\n" | nindent 12 }}
 {{- end }}
