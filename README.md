@@ -1,20 +1,28 @@
-# Zero to JupyterHub with Kubernetes
+# Zero to MLRecipes with Kubernetes
 
-[![Documentation build status](https://img.shields.io/readthedocs/zero-to-jupyterhub?logo=read-the-docs)](https://zero-to-jupyterhub.readthedocs.io/en/latest/?badge=latest)
-[![GitHub Workflow Status - Test](https://img.shields.io/github/actions/workflow/status/jupyterhub/zero-to-jupyterhub-k8s/test-chart.yaml?logo=github&label=tests)](https://github.com/jupyterhub/zero-to-jupyterhub-k8s/actions)
-[![GitHub Workflow Status - Vuln. scan](https://img.shields.io/github/actions/workflow/status/jupyterhub/zero-to-jupyterhub-k8s/vuln-scan.yaml?logo=github&label=Vuln.%20scan)](https://github.com/jupyterhub/zero-to-jupyterhub-k8s/actions)
-[![Latest stable release of the Helm chart](https://img.shields.io/badge/dynamic/json.svg?label=stable&url=https://hub.jupyter.org/helm-chart/info.json&query=$.jupyterhub.stable&colorB=orange&logo=helm)](https://jupyterhub.github.io/helm-chart#jupyterhub)
-[![Latest pre-release of the Helm chart](https://img.shields.io/badge/dynamic/json.svg?label=pre&url=https://hub.jupyter.org/helm-chart/info.json&query=$.jupyterhub.pre&colorB=orange&logo=helm)](https://jupyterhub.github.io/helm-chart#development-releases-jupyterhub)
-[![Latest development release of the Helm chart](https://img.shields.io/badge/dynamic/json.svg?label=dev&url=https://hub.jupyter.org/helm-chart/info.json&query=$.jupyterhub.latest&colorB=orange&logo=helm)](https://jupyterhub.github.io/helm-chart#development-releases-jupyterhub)
+This repo contains a *Helm chart* for [MLRecipes](https://github.com/khulnasoft/ml-recipes) and a guide to use it. Together,
+they allow you to make a JupyterHub available to a very large group of users such as the staff and students of a university.
+
+## MLRecipes Modifications
+
+In this repo, we made some modifications to the forked repo and its helm chart and default values so that it works with the [ml-recipes](https://github.com/khulnasoft/ml-recipes) and [ml-workspace](https://github.com/khulnasoft/ml-workspace) images. Hence, we do not use the hub or singleuser-sample image in the images/ directory.
+For most parts you should be able to follow the comprehensive guide linked below.
+
+Most prominent changes: 
+- change of the command fields in hub and proxy yamls
+- modifying ports to make tunnelling of ssh possible
+- changes of default values, e.g. the used images
+- changes of paths, e.g. the ssl secret mount path
+
+We do not push the helm chart to a repository for now, so feel free to download it from the [mlhub releases page](https://github.com/khulnasoft/ml-recipes/releases) or to create the package yourself via `helm package jupyterhub/`.
+
+You can then deploy the chart via `helm upgrade --install mlhub packaged-chart.tgz --namespace $namespace --values config.yaml`.
+The config.yaml can be used to overrride default values.
+
+---
 <br/>
-[![GitHub](https://img.shields.io/badge/issue_tracking-github-blue?logo=github)](https://github.com/jupyterhub/zero-to-jupyterhub-k8s/issues)
-[![Discourse](https://img.shields.io/badge/help_forum-discourse-blue?logo=discourse)](https://discourse.jupyter.org/c/jupyterhub/z2jh-k8s)
-[![Gitter](https://img.shields.io/badge/social_chat-gitter-blue?logo=gitter)](https://gitter.im/jupyterhub/jupyterhub)
-[![Contribute](https://img.shields.io/badge/I_want_to_contribute!-grey?logo=jupyter)](https://github.com/jupyterhub/zero-to-jupyterhub-k8s/blob/HEAD/CONTRIBUTING.md)
 
-This repo contains a _Helm chart_ for JupyterHub and a guide to use it. Together
-they allow you to make a JupyterHub available to a very large group of users
-such as the staff and students of a university.
+# Original Readme:
 
 ## The guide
 
@@ -32,25 +40,13 @@ deployment of JupyterHub on a Kubernetes cluster in a cloud environment. The
 released charts are made available in our [Helm chart
 repository](https://jupyterhub.github.io/helm-chart).
 
-## Notice of Participation in Study
-
-Please note that this repository is participating in a study into sustainability
-of open source projects. Data will be gathered about this repository for
-approximately the next 12 months, starting from 2021-06-11.
-
-Data collected will include number of contributors, number of PRs, time taken to
-close/merge these PRs, and issues closed.
-
-For more information, please visit
-[the informational page](https://sustainable-open-science-and-software.github.io/) or download the [participant information sheet](https://sustainable-open-science-and-software.github.io/assets/PIS_sustainable_software.pdf).
-
 ## History
 
 Much of the initial groundwork for this documentation is information learned
 from the successful use of JupyterHub and Kubernetes at UC Berkeley in their
 [Data 8](http://data8.org/) program.
 
-![](docs/source/_static/images/data8_massive_audience.jpg)
+![](doc/source/_static/images/data8_audience.jpg)
 
 ## Acknowledgements
 
@@ -62,7 +58,6 @@ Thank you to the following contributors:
 - Erik Sundell
 - Ryan Lovett
 - Yuvi Panda
-- Laurent Goderre
 
 Future contributors are encouraged to add themselves to this README file too.
 
