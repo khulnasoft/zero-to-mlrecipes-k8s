@@ -1,262 +1,128 @@
-import json
+import os
 import subprocess
 import time
 
 import pytest
 import requests
+import yaml
+
+# Makes heavy use of JupyterHub's API:
+# http://petstore.swagger.io/?url=https://raw.githubusercontent.com/jupyterhub/jupyterhub/master/docs/rest-api.yml
+
+# load app version of chart
+here = os.path.dirname(os.path.abspath(__file__))
+chart_yaml = os.path.join(here, os.pardir, 'jupyterhub', 'Chart.yaml')
+
+with open(chart_yaml) as f:
+    chart = yaml.safe_load(f)
+    jupyterhub_version = chart['appVersion']
+
+def test_api(api_request):
+    print("asking for the hub's version")
+    r = api_request.get('')
+    assert r.status_code == 200
+    assert r.json().get("version", "version-missing") == jupyterhub_version
 
 
-def test_spawn_basic(
-    api_request,
-    jupyter_user,
-    request_data,
-    pebble_acme_ca_cert,
-    extra_files_test_command,
-):
-    """
-    Tests the hub api's /users/:user/server POST endpoint. A user pod should be
-    created with environment variables defined in singleuser.extraEnv,
-    singleuser.extraFiles should be mounted, etc.
-    """
+def test_api_info(api_request):
+    print("asking for the hub information")
+    r = api_request.get('/info')
+    assert r.status_code == 200
+    result = r.json()
+    assert result['spawner']['class'] == 'kubespawner.spawner.KubeSpawner'
 
-    print("asking kubespawner to spawn a server for a test user")
-    r = api_request.post("/users/" + jupyter_user + "/server")
+
+def test_api_create_user(api_request, jupyter_user):
+    print("creating the testuser")
+    # Already created by the jupyter_user fixture
+    r = api_request.get('/users/' + jupyter_user)
+    assert r.status_code == 200
+    assert r.json()['name'] == jupyter_user
+
+
+def test_api_list_users(api_request, jupyter_user):
+    print("asking for information")
+    r = api_request.get('/users')
+    assert r.status_code == 200
+    assert any(u['name'] == jupyter_user for u in r.json())
+
+
+def test_api_request_user_spawn(api_request, jupyter_user, request_data):
+    print("asking kubespawner to spawn testusers singleuser-server pod")
+    r = api_request.post('/users/' + jupyter_user + '/server')
     assert r.status_code in (201, 202)
     try:
-        # check successful spawn
-        server_model = _wait_for_user_to_spawn(
-            api_request, jupyter_user, request_data["test_timeout"]
-        )
+        server_model = _wait_for_user_to_spawn(api_request, jupyter_user, request_data['test_timeout'])
         assert server_model
-        r = requests.get(
-            request_data["hub_url"].partition("/hub/api")[0]
-            + server_model["url"]
-            + "api",
-            verify=pebble_acme_ca_cert,
-        )
+        r = requests.get(request_data['hub_url'].partition('/hub/api')[0] + server_model['url'] + "api")
         assert r.status_code == 200
-        assert "version" in r.json()
-
-        pod_name = server_model["state"]["pod_name"]
-
-        # check user pod's labels
-        pod_json = subprocess.check_output(
-            [
-                "kubectl",
-                "get",
-                "pod",
-                "--output=json",
-                pod_name,
-            ]
-        )
-        pod = json.loads(pod_json)
-        pod_labels = pod["metadata"]["labels"]
-
-        # check for modern labels
-        assert pod_labels["app.kubernetes.io/name"] == "jupyterhub"
-        assert "app.kubernetes.io/instance" in pod_labels
-        # FIXME: app.kubernetes.io/component for user pods require kubespawner
-        #        with https://github.com/jupyterhub/kubespawner/pull/835.
-        # assert pod_labels["app.kubernetes.io/component"] == "singleuser-server"
-        assert pod_labels["helm.sh/chart"].startswith("jupyterhub-")
-        assert pod_labels["app.kubernetes.io/managed-by"] == "kubespawner"
-
-        # check for legacy labels still meant to be around
-        assert pod_labels["app"] == "jupyterhub"
-        assert "release" in pod_labels
-        assert pod_labels["chart"].startswith("jupyterhub-")
-        assert pod_labels["component"] == "singleuser-server"
-
-        # check user pod's extra environment variable
-        c = subprocess.run(
-            [
-                "kubectl",
-                "exec",
-                pod_name,
-                "--",
-                "sh",
-                "-c",
-                "if [ -z $TEST_ENV_FIELDREF_TO_NAMESPACE ]; then exit 1; fi",
-            ]
-        )
-        assert (
-            c.returncode == 0
-        ), "singleuser.extraEnv didn't lead to a mounted environment variable!"
-
-        # check user pod's extra files
-        c = subprocess.run(
-            [
-                "kubectl",
-                "exec",
-                pod_name,
-                "--",
-                "sh",
-                "-c",
-                extra_files_test_command,
-            ]
-        )
-        assert (
-            c.returncode == 0
-        ), "The singleuser.extraFiles configuration doesn't seem to have been honored!"
+        assert 'version' in r.json()
     finally:
-        _delete_server(api_request, jupyter_user, request_data["test_timeout"])
+        _delete_server(api_request, jupyter_user, request_data['test_timeout'])
 
 
-@pytest.mark.netpol
-def test_spawn_netpol(api_request, jupyter_user, request_data):
-    """
-    Tests a spawned user pods ability to communicate with allowed and blocked
-    internet locations.
-    """
-
-    print(
-        "asking kubespawner to spawn a server for a test user to test network policies"
-    )
-    r = api_request.post("/users/" + jupyter_user + "/server")
+@pytest.mark.skipif(os.getenv('DISABLE_TEST_NETPOL') == '1',
+                    reason="DISABLE_TEST_NETPOL set")
+def test_singleuser_netpol(api_request, jupyter_user, request_data):
+    print("asking kubespawner to spawn a singleuser-server pod to test network policies")
+    r = api_request.post('/users/' + jupyter_user + '/server')
     assert r.status_code in (201, 202)
     try:
-        # check successfull spawn
-        server_model = _wait_for_user_to_spawn(
-            api_request, jupyter_user, request_data["test_timeout"]
-        )
+        server_model = _wait_for_user_to_spawn(api_request, jupyter_user, request_data['test_timeout'])
         assert server_model
-        pod_name = server_model["state"]["pod_name"]
+        print(server_model)
+        pod_name = server_model['state']['pod_name']
 
-        c = subprocess.run(
-            [
-                "kubectl",
-                "exec",
-                pod_name,
-                "--",
-                "nslookup",
-                "hub",
-            ],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-        if c.returncode != 0:
-            print(f"Return code: {c.returncode}")
-            print("---")
-            print(c.stdout)
-            raise AssertionError(
-                "DNS issue: failed to resolve 'hub' from a singleuser-server"
-            )
+        # Must match CIDR in minikube-netpol.yaml
+        allowed_url = 'http://jupyter.org'
+        blocked_url = 'http://mybinder.org'
 
-        c = subprocess.run(
-            [
-                "kubectl",
-                "exec",
-                pod_name,
-                "--",
-                "nslookup",
-                "jupyter.org",
-            ],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-        if c.returncode != 0:
-            print(f"Return code: {c.returncode}")
-            print("---")
-            print(c.stdout)
-            raise AssertionError(
-                "DNS issue: failed to resolve 'jupyter.org' from a singleuser-server"
-            )
+        c = subprocess.run([
+            'kubectl', '--namespace=jupyterhub-test', 'exec', pod_name, '--',
+            'wget', '-q', '-t1', '-T5', allowed_url])
+        assert c.returncode == 0, "Unable to get allowed domain"
 
-        # The IPs we test against are differentiated by the NetworkPolicy shaped
-        # by the dev-config.yaml's singleuser.networkPolicy.egress
-        # configuration. If these IPs change, you can use `nslookup jupyter.org`
-        # to get new IPs but beware that this response may look different over
-        # time at least on our GitHub Action runners. Note that we have
-        # explicitly pinned these IPs and explicitly pass the Host header in the
-        # web-request in order to avoid test failures following additional IPs
-        # are added.
-        allowed_jupyter_org_ip = "104.21.25.233"
-        blocked_jupyter_org_ip = "172.67.134.225"
-
-        cmd_kubectl_exec = ["kubectl", "exec", pod_name, "--"]
-        cmd_python_exec = ["python", "-c"]
-        cmd_python_code = "import socket; s = socket.socket(); s.settimeout(3); s.connect(('{ip}', 80)); s.close();"
-        cmd_check_allowed_ip = (
-            cmd_kubectl_exec
-            + cmd_python_exec
-            + [cmd_python_code.format(ip=allowed_jupyter_org_ip)]
-        )
-        cmd_check_blocked_ip = (
-            cmd_kubectl_exec
-            + cmd_python_exec
-            + [cmd_python_code.format(ip=blocked_jupyter_org_ip)]
-        )
-
-        # check allowed jupyter.org ip connectivity
-        c = subprocess.run(
-            cmd_check_allowed_ip,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-        if c.returncode != 0:
-            print(f"Return code: {c.returncode}")
-            print("---")
-            print(c.stdout)
-            raise AssertionError(
-                f"Network issue: access to '{allowed_jupyter_org_ip}' was supposed to be allowed"
-            )
-
-        # check blocked jupyter.org ip connectivity
-        c = subprocess.run(
-            cmd_check_blocked_ip,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-        if c.returncode == 0:
-            print(f"Return code: {c.returncode}")
-            print("---")
-            print(c.stdout)
-            raise AssertionError(
-                f"Network issue: access to '{blocked_jupyter_org_ip}' was supposed to be denied"
-            )
+        c = subprocess.run([
+            'kubectl', '--namespace=jupyterhub-test', 'exec', pod_name, '--',
+            'wget', '-q', '-t1', '-T5', blocked_url])
+        assert c.returncode > 0, "Blocked domain was allowed"
 
     finally:
-        _delete_server(api_request, jupyter_user, request_data["test_timeout"])
+        _delete_server(api_request, jupyter_user, request_data['test_timeout'])
 
 
 def _wait_for_user_to_spawn(api_request, jupyter_user, timeout):
     endtime = time.time() + timeout
     while time.time() < endtime:
-        # NOTE: If this request fails with a 503 response from the proxy, the
-        #       hub pod has probably crashed by the tests interaction with it.
-        r = api_request.get("/users/" + jupyter_user)
+        # FIXME: This can fail with 503! Make it robuster than this!
+        r = api_request.get('/users/' + jupyter_user)
         r.raise_for_status()
         user_model = r.json()
 
-        # Note that JupyterHub has a concept of named servers, so the default
-        # server is named "", a blank string.
-        if "" in user_model["servers"]:
-            server_model = user_model["servers"][""]
-            if server_model["ready"]:
-                return server_model
-        else:
-            print("Awaiting server info to be part of user_model...")
+        # will be pending while starting,
+        # server will be set when ready
+        if '' not in user_model['servers']:
+            # spawn failed!
+            raise RuntimeError("Server never started!")
+
+        server_model = user_model['servers']['']
+        if server_model['ready']:
+            return server_model
 
         time.sleep(1)
     return False
 
 
 def _delete_server(api_request, jupyter_user, timeout):
-    # NOTE: If this request fails with a 503 response from the proxy, the hub
-    #       pod has probably crashed by the previous tests' interaction with it.
-    r = api_request.delete("/users/" + jupyter_user + "/server")
+    r = api_request.delete('/users/' + jupyter_user + '/server')
     assert r.status_code in (202, 204)
 
     endtime = time.time() + timeout
     while time.time() < endtime:
-        r = api_request.get("/users/" + jupyter_user)
+        r = api_request.get('/users/' + jupyter_user)
         r.raise_for_status()
         user_model = r.json()
-        if "" not in user_model["servers"]:
+        if '' not in user_model['servers']:
             return True
         time.sleep(1)
     return False

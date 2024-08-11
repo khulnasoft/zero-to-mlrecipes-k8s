@@ -1,348 +1,341 @@
 # Contributing
 
-Welcome dear open source colleague! As this is a [Jupyter](https://jupyter.org)
-project please start by looking at the [Jupyter contributor
-guide](https://jupyter.readthedocs.io/en/latest/contributing/content-contributor.html),
-and follow [Project Jupyter's Code of
-Conduct](https://github.com/jupyter/governance/blob/HEAD/conduct/code_of_conduct.md)
-to help us sustain a warm and welcoming collaborative environment.
+Welcome! As a [Jupyter](https://jupyter.org) project, we follow the [Jupyter contributor guide](https://jupyter.readthedocs.io/en/latest/contributor/content-contributor.html).
 
-If you don't have [git](https://www.git-scm.com/) already, install it and clone
-this repository.
+## Setting up minikube for local development
 
-```shell
-git clone https://github.com/jupyterhub/zero-to-jupyterhub-k8s
-```
-
-# Setting up for documentation development
-
-See [docs/README.md](docs/README.md).
-
-# Setting up for Helm chart development
-
-## 1: Prerequisites
-
-This needs to be installed:
-
-- [docker](https://docs.docker.com/get-docker/)
-- [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/) (also [setup tab completion](https://kubernetes.io/docs/tasks/tools/install-kubectl/#enabling-shell-autocompletion))
-- [helm](https://helm.sh/docs/intro/install/) (also [setup tab completion](https://helm.sh/docs/helm/helm_completion/))
-- Python 3.6+ (install at [Anaconda.com](https://www.anaconda.com/distribution/) or [Python.org](https://www.python.org/downloads/)) and dependencies:
-  ```shell
-  pip install -r dev-requirements.txt
-  pip install -r docs/requirements.txt
-  ```
-
-You can check if you have it all like this:
-
-```shell
-docker --version
-kubectl version --client
-helm version
-pytest --version
-chartpress --version
-```
-
-## 2: Setup a Kubernetes cluster
-
-We need a Kubernetes cluster to work against.
-If you are using Linux you can either install [k3s](#linux-only-kubernetes-setup-with-k3s) or [k3d](#linux-mac-and-maybe-windows-kubernetes-setup-with-k3d).
-For all other operating systems install [k3d](#linux-mac-and-maybe-windows-kubernetes-setup-with-k3d).
-
-### Linux only: Kubernetes setup with k3s
-
-With [k3s](https://github.com/rancher/k3s) we can _quickly_ create a Kubernetes
-cluster, and we _don't have to transfer docker images_ built on our computer to
-make them available in the Kubernetes cluster.
-
-**Install**
-
-```shell
-# Installs a ~50 MB k3s binary, setups and starts a systemctl service called
-# k3s which is also enabled to run on startup, provides a k3s-uninstall.sh
-# script, disables not needed functionality. You will be asked for sudo rights.
-curl -sfL https://get.k3s.io | sh -s - \
-    --write-kubeconfig-mode=644 \
-    --disable metrics-server \
-    --disable traefik \
-    --disable local-storage \
-    --disable-network-policy \
-    --docker
-
-# Ensure kubectl will work with our k3s cluster
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-```
-
-**Start/Stop and Enable/Disable**
-
-With `systemctl` you can `start` and `stop` the service named `k3s` representing
-the cluster, as well as `enable` and `disable` the service's automatic startup
-with your computer.
-
-At the moment, there is a workaround making us need to run `docker stop` due to [this issue](https://github.com/rancher/k3s/issues/1469) to fully stop.
-
-```shell
-sudo systemctl stop k3s
-docker stop $(docker container list --quiet --filter "name=k8s_")
-```
-
-**Debug**
-
-```shell
-# what is the status of the k3s service?
-sudo systemctl status k3s
-
-# what logs have the k3s service generated recently?
-journalctl -u k3s --since "1 hour ago"
-
-# what containers are running?
-docker container list --filter "name=k8s_"
-```
-
-**Uninstall**
-
-When k3s was installed with the installation script, an uninstallation script is
-made available as well.
-
-At the moment, there is a workaround needed while uninstalling.
-
-```shell
-k3s-uninstall.sh
-# ... and a temporary workaround of https://github.com/rancher/k3s/issues/1469
-docker stop $(docker container list --all --quiet --filter "name=k8s_") | xargs docker rm
-```
-
-### Linux, Mac, and possibly Windows: Kubernetes setup with k3d
-
-> **IMPORTANT:** This setup assume k3d v1, because the k3d v3 doesn't support
-> the `--docker` flag. This is tracked in [this issue](https://github.com/rancher/k3d/issues/113).
-
-[k3d](https://github.com/rancher/k3d) encapsulates k3s in containers. It is less
-mature than [k3s](https://github.com/rancher/k3s) and will require locally built
-docker images to be pushed to a dedicated registry before they can be accessed
-by the pods in the Kubernetes cluster, until [this
-issue](https://github.com/rancher/k3d/issues/113) is resolved.
-
-**Install**
-
-```shell
-k3d create --publish 30443:30443 --publish 32444:32444 --wait 60 \
-   --enable-registry --registry-name local.jovyan.org \
-   --server-arg --no-deploy=metrics-server \
-   --server-arg --no-deploy=traefik \
-   --server-arg --no-deploy=local-storage \
-   --server-arg --disable-network-policy
-
-# For Linux/Mac:
-export KUBECONFIG="$(k3d get-kubeconfig --name='k3s-default')"
-
-# For Windows:
-# These instructions aren't maintained, you need to figure it out yourself =/
-```
-
-**About the published ports**
-
-- 30443: This port exposes the `proxy-public` service. It will route to the
-  `autohttps` pod for TLS termination, then onwards to the `proxy` pod
-  that routes to the `hub` pod or individual user pods depending on paths
-  (`/hub` vs `/user`) and how JupyterHub dynamically has configured it.
-- 32444: This port exposes the `pebble` service which which accepts two ports,
-  and this specific port will route to the `pebble` pod's management API
-  where we can access paths like `/roots/0`. For more details about
-  Pebble which we use as a local ACME server, see the section below and
-  https://github.com/jupyterhub/pebble-helm-chart.
-
-**Stop**
-
-```shell
-k3d delete
-```
-
-## 3: Install a local ACME server
-
-Testing automatic TLS certificate acquisition with an ACME server like Let's
-Encrypt from a local Kubernetes cluster is tricky. First you need a public
-domain name registered and pointing to some public IP, and you need traffic to
-that IP end up inside your Kubernetes cluster. In our Travis CI setup we must
-install a local ACME server instead, and that is also recommended for local
+We recommend using [minikube](https://github.com/kubernetes/minikube) for local
 development.
 
-Pebble is a an ACME server like Let's Encrypt solely meant for testing purposes.
-For more information, see
-[jupyterhub/pebble-helm-chart](https://github.com/jupyterhub/pebble-helm-chart).
+1. [Download & install minikube](https://github.com/kubernetes/minikube#installation).
 
-**Install Pebble**
+   For MacOS: You may install minikube using Homebrew `brew cask install minikube` or
+   from a binary at https://github.com/kubernetes/minikube/releases.
+   If you need to install Docker Community Edition (CE) for Mac, please
+   follow the [Docker instructions](https://store.docker.com/editions/community/docker-ce-desktop-mac).
 
-```shell
-helm repo add jupyterhub https://hub.jupyter.org/helm-chart/
-helm repo update
-helm upgrade --install pebble jupyterhub/pebble --cleanup-on-fail --values dev-config-pebble.yaml
-```
+2. [Download & install helm](https://github.com/helm/helm#install).
 
-## 4: Build images, update values, install chart
+   You may install Helm using one of the following steps:
 
-This repository contains various `Dockerfile`s that are used to build docker images
-required by the Helm chart. To help us build these docker images only when needed,
-and to update the Helm chart's [values.yaml](jupyterhub/values.yaml) file to use
-the most recent image, we rely on a command line tool called
-[`chartpress`](https://github.com/jupyterhub/chartpress) that is installed as
-part of [dev-requirements.txt](dev-requirements.txt).
+   * With the following curl command:
 
-Chartpress is configured through [chartpress.yaml](chartpress.yaml), and will
-only rebuild images if their dependent files in their respective directories or
-`chartpress.yaml` itself has changed.
+     ```
+     curl https://raw.githubusercontent.com/kubernetes/helm/master/scripts/get | bash
+     ```
+   * From one of the binaries at https://github.com/helm/helm/releases
+   * For MacOS, using Homebrew: `brew install kubernetes-helm`
 
-1. Ensure the latest git tags are available locally, as `chartpress` uses them.
+3. Start minikube.
 
-   ```shell
-   git fetch origin --tags
+   For minikube version 0.26 and higher:
+   ```bash
+   minikube start
    ```
 
-1. Use [`chartpress`](https://github.com/jupyterhub/chartpress) to rebuild
-   images that need to be rebuilt and update the chart's
-   [values.yaml](jupyterhub/values.yaml) file with the appropriate image tags.
-
-   ```shell
-   # run this if you are using k3s, or generally when your Kubernetes cluster
-   # can make direct use of your locally built images
-   chartpress
-
-   # run this if you are using k3d
-   chartpress --image-prefix=local.jovyan.org:5000/ --push
+   For older minikube versions:
+   ```bash
+   minikube start --extra-config=apiserver.Authorization.Mode=RBAC
    ```
 
-1. Use `helm` to upgrade (or install) your local JupyterHub Helm chart.
+   Note on troubleshooting: if you recently upgraded minikube and are now seeing
+   errors, you may need to clear out the `~/.minikube` and `~/.kube` directories
+   and reboot.
 
-   ```shell
-   helm upgrade --install jupyterhub ./jupyterhub --cleanup-on-fail --values dev-config.yaml
+4. Use the docker daemon inside minikube for building:
+   ```bash
+   eval $(minikube docker-env)
    ```
 
-   Note that `--cleanup-on-fail` is a very good practice to avoid `<resource name> already exist` errors in future upgrades following a failed upgrade.
+5. Clone the zero-to-jupyterhub repo:
+   ```bash
+   git clone git@github.com:jupyterhub/zero-to-jupyterhub-k8s.git
+   cd zero-to-jupyterhub-k8s
+   ```
 
-## 5: Visit the JupyterHub
+6. Create a virtualenv & install the libraries required for builds to happen:
+   ```bash
+   python3 -m venv .
+   source bin/activate
+   python3 -m pip install -r dev-requirements.txt
+   ```
 
-After all your pods are running and the `autohttps` pod succesfully has acquired
-a certificate from the `pebble` pod acting as an ACME server, you should be able
-to access https://local.jovyan.org:30443. Your browser will probably require you
-to accept the TLS certificate as its signed an untrusted certificate authority.
+7. Now run `chartpress` to build the requisite docker images inside minikube:
+    ```bash
+    chartpress
+    ```
 
-Note that `local.jovyan.org` and its subdomains are Project Jupyter managed
-domains pointing to the localhost IP of `127.0.0.1`, we use them to avoid
-needing to add entries to `/etc/hosts`.
+    This will build the docker images inside minikube & modify
+    `jupyterhub/values.yaml` with the appropriate values to make the chart
+    installable!
 
-## 6: Run tests
+8. Configure helm and minikube for RBAC:
+   ```bash
+   kubectl create clusterrolebinding add-on-cluster-admin --clusterrole=cluster-admin --serviceaccount=kube-system:default
+   kubectl --namespace kube-system create sa tiller
+   kubectl create clusterrolebinding tiller \
+       --clusterrole cluster-admin \
+       --serviceaccount=kube-system:tiller
+   helm init --service-account tiller
+   ```
 
-The test suite runs outside your Kubernetes cluster.
+9. Install / Upgrade JupyterHub Chart!
+   ```bash
+   helm upgrade --wait --install --namespace=hub hub jupyterhub/ -f minikube-config.yaml
+   ```
 
-```shell
-pytest -vx -m "not netpol" ./tests
+   You can easily change the options in `minikube-config.yaml` file to test what
+   you want, or create another `config.yaml` file & pass that as an additional
+   `-f config.yaml` file to the `helm upgrade` command.
+
+10. Retrieve the URL for your instance of JupyterHub:
+
+   ```bash
+   minikube service --namespace=hub proxy-public
+   ```
+
+   Navigate to the URL in your browser. You should now have JupyterHub running
+   on minikube.
+
+11. Make the changes you want.
+
+    To view your changes on the running development instance of JupyterHub:
+
+    - Re-run step 7 if you changed anything under the `images` directory
+    - Re-run step 9 if you changed things only under the `jupyterhub` directory.
+
+
+## Travis CI tests
+
+Travis tests are automatically run on every pull request.
+Since the Travis environment is not accessible it can be difficult to debug CI failures.
+A [`Vagrantfile`](ci/Vagrantfile) which partially simulates the Travis environment is included, and may be useful when updating the CI deployments, though it is by no means an exact replica.
+
+1. Start and login to the Vagrant box:
+
+   ```bash
+   cd ci
+   vagrant up
+   vagrant ssh
+   ```
+
+2. Run the test script.
+   Optionally edit `SCENARIO` in [`./ci/vagrant-run.sh`](./ci/vagrant-run.sh)
+   if you want to test a different scenario
+
+   ```bash
+   cd /zero-to-jupyterhub-k8s
+   ./ci/vagrant-run.sh
+   ```
+
+
+---
+
+## Best practices
+
+We strive to follow the guidelines provided by [kubernetes/charts](https://github.com/kubernetes/charts/blob/master/REVIEW_GUIDELINES.md) and the [Helm Chart Best Practices Guide](https://github.com/kubernetes/helm/tree/master/docs/chart_best_practices) they refer to.
+
+## Releasing a new version of the helm chart
+
+The following steps can be followed to release a new version of the Helm Chart.
+Presently, we expect a release approximately every 5-7 weeks.
+
+
+### Create an issue for the new release
+
+Use this issue to coordinate efforts and keep track of progress. You can
+copy / paste the raw Markdown from the following list, which will be covered
+in more detail below.
+
+```
+Title: Release {{release-name}}
+Content:
+
+This issue will be used to coordinate the next release of the helm
+chart, {{release-name}}. Instructions for creating the release can be found in
+[CONTRIBUTING.md](https://github.com/jupyterhub/zero-to-jupyterhub-k8s/blob/master/CONTRIBUTING.md#releasing-a-new-version-of-the-helm-chart).
+Below is the checklist for this release.
+
+- [ ] Code, tests, and documentation to support a release are stable.
+- [ ] Make a CHANGELOG
+- [ ] Generate and add the list of contributors
+- [ ] Build and push a new Docker image to DockerHub
+- [ ] Commit version bump in `Chart.yaml` and `Values.yaml`
+- [ ] Update references in documentation to the new version (note: documentation
+      should be stable and there should be no anticipated major changes to content).
+- [ ] Confirm that a new deployment using the updated instructions works
+- [ ] Create and push a new tag for this release
+- [ ] Create and publish a new GitHub release
+- [ ] Write / publish a blog post based largely off of the CHANGELOG
+- [ ] Set ReadTheDocs to begin using `latest` by default
+- [ ] Celebrate!
 ```
 
-Note that we disable NetworkPolicy enforcement tests. This is because k3s native
-NetworkPolicy enforcement have an
-[issue](https://github.com/rancher/k3s/issues/947) that makes our tests fail,
-and while we workaround this in the GitHub workflow tests by manually installing
-Calico (A k8s CNI that can enforce NetworkPolicy resources), we don't provide
-instructions for this here.
+As there are often many documentation improvements following the release of
+a new version, we set ReadTheDocs to serve `latest/` until the first docs are
+written that are next-version-specific. As soon as documentation must be
+written for the **next** version of the Helm Chart, you can use the following
+checklist:
 
-# Formatting and linting
-
-[pre-commit](https://pre-commit.com/) is used to autoformat and lint files in this repository.
-
-To auto-format and lint [all configurations](./.pre-commit-config.yaml) run:
-
-```shell
-pre-commit run -a
+```
+- [ ] Create a new tag for a documentation release (same release name with `-doc` at the end)
+- [ ] Publish this tag
+- [ ] Set ReadTheDocs to point to the **new tag** by default instead of `latest`
+- [ ] Continue making next-version-specific changes to the documentation.
 ```
 
-and commit any changes.
+**Note**: Switching the documentation to `latest` after a new release is a stop-gap
+measure to accomodate the fact that the documentation is still changing relatively
+rapidly. Once the documentation as a whole stabilizes (after a few more release
+cycles), we plan to begin switching straight from the last version to the new version
+of documentation without going through latest.
 
-You can configure pre-commit to automatically run as a git hook, see the [pre-commit installation instructions](https://pre-commit.com/).
+### Make a CHANGELOG
 
-# Debugging
+This needs to be manually created, following the format of
+current [CHANGELOG](https://github.com/jupyterhub/zero-to-jupyterhub-k8s/blob/master/CHANGELOG.md). The general structure should be:
 
-Various things can go wrong while working with the local development
-environment, here are some typical issues and what to do about them.
+* A short description of the general theme / points of interest for
+ this release.
+* Breaking changes + a link to the [upgrade instructions](https://zero-to-jupyterhub.readthedocs.io/en/v0.5-doc/upgrading.html) in the docs
+* A list of features with brief descriptions under each.
+* The contributor list mentioned in the section below.
 
-## Basic debugging strategy in Kubernetes
+### Add list of contributors
 
-A good debugging strategy is to start with the following steps.
+We try to recognize *all* sorts of contributors, rather
+than just code committers.
 
-1. Inspect the status of pods with `kubectl get pods`.
-2. Inspect events and status of some pod with `kubectl describe pod <name>`.
-3. Inspect a pod's container's logs with `kubectl logs ...`. Sometimes you need
-   to specify `-c <container name>` or `--all-containers`. And sometimes you may
-   want to specify the `--previous` flag to see the logs from the previous
-   container run.
+Use the script in `tools/contributors.py` to list all
+contributions (anyone who made a commit or a comment)
+since the latest release. For each
+release, you'll need to find the versions of all repos
+involved:
 
-## HTTPS errors
+* [z2jh](https://github.com/jupyterhub/zero-to-jupyterhub-k8s)
+* [KubeSpawner](https://github.com/jupyterhub/kubespawner)
+* [JupyterHub](https://github.com/jupyterhub/jupyterhub)
+* [OAuthenticator](https://github.com/jupyterhub/oauthenticator)
 
-Your browser is expected to complain about the TLS certificate when visiting
-https://local.jovyan.org:30443 as its signed by an untrusted certificate
-authority and shouldn't be trusted unless it is solely for testing purposes.
+Edit `contributors.py` to have the appropriate dates
+for each of these versions. Then, run the script and paste
+the output into the changelog. For an
+example, see [the v0.5 list of contributors](https://github.com/jupyterhub/zero-to-jupyterhub-k8s/blob/v0.5/CHANGELOG.md#contributors).
 
-But if for example Chrome presents `ERR_SSL_PROTOCOL_ERROR` or Firefox presents
-`SSL_ERROR_INTERNARROR_ALERT`, then the `autohttps` pod has probably failed to
-acquire a TLS certificate from the ACME server.
 
-Some relevant debugging steps are...
+### Push built images to DockerHub + bump version
 
-```shell
-# the certificate should be available here
-kubectl exec -it deploy/autohttps -c traefik -- cat /etc/acme/acme.json
+The JupyterHub helm chart uses a Docker image that's registered
+on DockerHub. When releasing a new version of the helm chart,
+you also need to push a new version of this image. To do so,
+you must have:
 
-# these logs should contain "Register..."
-kubectl logs deploy/autohttps -c traefik
+1. Docker running locally
+2. An account on DockerHub that you are logged into from
+  your local docker installation.
+3. Push rights for images under `jupyterhub/` on
+  the DockerHub registry.
+4. Push rights to the `jupyterhub/helm-chart` repository on GitHub.
+5. A local SSH key that will let you push to the `helm-chart` repository
+  on GitHub. See [these instructions](https://help.github.com/articles/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent) for information on how to create this.
 
-# these logs should contain "Issued certificate"
-kubectl logs deploy/pebble -c pebble
-```
+**Note**: If you don't have a DockerHub account, or don't have push rights to
+the DockerHub registry, open an issue and ping one of the core devs.
 
-Relevant background understanding is that the `autohttps` is running Traefik,
-which in turn is running a ACME client library called Lego. Lego will ask the
-ACME server (Pebble) to challenge it as the owner of a domain following which
-the ACME server will attempt to send out a HTTP request to the domain. Only if
-this challenge request made to the domain leads to a response by the ACME client
-asking the ACME server for the challenge, the ACME server will provide the ACME
-client with a certificate.
+If you have all of this, you can then:
 
-We use Pebble as a local ACME server to make it be able to send traffic to the
-ACME client in the `autohttps` pod without needing to have a publicly exposed IP
-that Let's Encrypt staging ACME server would be able to reach.
+1. Check out latest master of [z2jh](https://github.com/jupyterhub/zero-to-jupyterhub-k8s)
+2. Run `chartpress --tag <VERSION> --push --publish-chart`.
+  * For example, to relase `v0.5`, you would run
+  `chartpress --tag v0.5 --push --publish-chart`.
+  Note the `v` before version.
+3. This will also modify the files `Chart.yaml` and `values.yaml`.
+  Commit these changes.
+4. Look through the [z2jh documentation](https://zero-to-jupyterhub.readthedocs.io) and find any references to
+  the Helm Chart version (e.g., look for the flag `--version`, as well
+  as for all `helm upgrade` and `helm install` commands).
+  Update these references to point to the new version you are releasing.
+5. Make a PR to the z2jh repository and notify the team to take a look.
 
-The domain name we use is `local.jovyan.org` which is a dummy domain we have
-registered to map to 127.0.0.1. If Pebble would send out a challenge from its
-pod to that domain, it would route to itself which is a problem. So, we instead
-explicitly trick our development Kubernetes cluster's DNS server, which in our
-development setup is `coredns`.
+After this PR gets merged:
 
-## Hub restarts
+1. Go to https://zero-to-jupyterhub.readthedocs.io/en/latest and
+  deploy a JupyterHub using the instructions (make sure that
+  you're reading from `/en/latest`). Make sure your latest
+  changes are present, and that the JupyterHub successfully deploys
+  and functions properly.
 
-Have you seen the hub pod get a restart count > 0? JupyterHub 1.1.0 is typically
-crashing after 20 seconds if it started up without the configurable proxy pod
-available. This harmless error can be confirmed by doing a `kubectl logs deploy/hub --previous` if you spot a message about a timeout after ~20 seconds in
-the logs.
+Next, move on to making a GitHub release, described below.
 
-## Network errors
+### Tagging and making a GitHub release
 
-Did you get an error like one of these below?
+Now that our Docker image is pushed and we have updated the documentation
+for z2jh, it's time to make a new GitHub release. To do this, you must have:
 
-```shell
-# while running apt-get install while building a docker image with chartpress
-E: Failed to fetch http://archive.ubuntu.com/ubuntu/pool/main/r/rtmpdump/librtmp1_2.4+20151223.gitfa8646d.1-1_amd64.deb  Could not connect to archive.ubuntu.com:80 (91.189.88.174). - connect (113: No route to host) Could not connect to archive.ubuntu.com:80 (91.189.88.31). - connect (113: No route to host) [IP: 91.189.88.174 80]
-# [...]
-subprocess.CalledProcessError: Command '['docker', 'build', '-t', 'quay.io/jupyterhub/k8s-hub:0.9-217f798', 'images/hub', '--build-arg', 'JUPYTERHUB_VERSION=git+https://github.com/jupyterhub/jupyterhub@master']' returned non-zero exit status 100.
+1. Push rights to the `jupyterhub/zero-to-jupyterhub-k8s` repo
 
-# while installing a dependency for our k8s cluster
-Unable to connect to the server: dial tcp: lookup docs.projectcalico.org on 127.0.0.53:53: read udp 127.0.0.1:56409->127.0.0.53:53: i/o timeout
-```
+You will need to make a git tag, and then create a GitHub release.
 
-Network and DNS issues are typically symptoms of unreliable internet. You can
-recognize such issues if you get errors like the ones above.
+1. Make sure you're on branch `master` with your latest changes from
+  the section above pulled.
+2. Make a git tag with:
+  ```
+  git tag -a <VERSION>
+  ```
 
-As you may notice, typical keywords associated with network errors are:
+  Where `<VERSION>` should be the new version that you're releasing.
+  Note the `v` before the version number.
 
-- _resolve host_
-- _name resolution_
-- _timeout_
-- _no route to host_
+  Git will ask you to include a message with the tag.
+  Paste the entire contents of the CHANGELOG for this particular release.
+  An easy way to do this is to paste the contents in a text file, and
+  then refer to that text file with the call to commit:
+  `git tag -a <VERSION> -F <PATH-TO-FILE.txt>`
+3. Push the tags to the `jupyterhub/zero-to-jupyterhub-k8s` repo with
+  `git push <REMOTE-NAME> --tags`.
+  Note that `<REMOTE-NAME>` is whatever your local git uses to refer
+  to the `jupyerhub/` organization's repository (e.g., `official`
+  or `upstream`)
+3. Make a **GitHub Release**:
+  * go to https://github.com/jupyterhub/zero-to-jupyterhub-k8s/releases and click 'Draft new release'.
+  * The title should be the new version, followed by the name of the cricketer for the release. Like so:`v0.5: "Hamid Hassan"`.
+  * The description should include the entire changelog entry for this release.
+  * Make sure the title/description/tag name look correct, and then click
+    on `Publish Release`.
+
+You've just made a GitHub release!
+
+
+### RTD update
+
+Wait a few hours to let the release 'cool' and make sure that links,
+webpages, etc have updated. Then, update our documentation settings on
+readthedocs to show `latest` by default. This marks the official
+'release' of the version!
+
+### Last step - release a blog post and tell the world!
+
+The final step is to release a blog post. This doesn't have to be
+done by the person who performed all of the above actions.
+
+To release a blog post for the new version, start a draft on the Jupyter Medium
+blog. Copy/paste the section of the CHANGELOG corresponding to the new
+release, then make minor modifications to make it more blog-friendly.
+
+Don't forget to tell the JupyterHub community about the new release, and
+to encourage people to talk about it on social media!
+
+That's it! Congratulations on making a new release of JupyterHub!
+
+### Extra step - release a documentation release
+
+It is common that documentation changes are made shortly after a new release.
+To handle this, we often create a documentation release a few days after a
+major release.
+
+To do this, confirm that all changes to the documentation
+are merged into master, then create a new tag with the same release name and
+`-doc` appended to the end. Create a GitHub release with the new tag and a
+description that points to the original release description. Finally, set
+our ReadTheDocs settings to point users to the new `-doc` tag by default instead
+of `latest`.
