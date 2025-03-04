@@ -216,7 +216,7 @@ proxy:
       # tag is automatically bumped to new patch versions by the
       # watch-dependencies.yaml workflow.
       #
-      tag: "4.6.2" # https://github.com/jupyterhub/configurable-http-proxy/tags
+      tag: "4.6.3" # https://github.com/jupyterhub/configurable-http-proxy/tags
       pullPolicy:
       pullSecrets: []
     extraCommandLineFlags: []
@@ -274,7 +274,7 @@ proxy:
       # tag is automatically bumped to new patch versions by the
       # watch-dependencies.yaml workflow.
       #
-      tag: "v3.2.1" # ref: https://hub.docker.com/_/traefik?tab=tags
+      tag: "v3.3.4" # ref: https://hub.docker.com/_/traefik?tab=tags
       pullPolicy:
       pullSecrets: []
     hsts:
@@ -551,7 +551,7 @@ scheduling:
       # here. We aim to stay around 1 minor version behind the latest k8s
       # version.
       #
-      tag: "v1.30.7" # ref: https://github.com/kubernetes/kubernetes/tree/master/CHANGELOG
+      tag: "v1.30.10" # ref: https://github.com/kubernetes/kubernetes/tree/master/CHANGELOG
       pullPolicy:
       pullSecrets: []
     nodeSelector: {}
@@ -600,6 +600,7 @@ scheduling:
       seccompProfile:
         type: "RuntimeDefault"
     resources: {}
+    extraPodSpec: {}
   corePods:
     tolerations:
       - key: hub.jupyter.org/dedicated
@@ -664,12 +665,22 @@ prePuller:
     nodeSelector: {}
     tolerations: []
     resources: {}
+    # Service Account for the hook-image-awaiter Job
     serviceAccount:
+      create: true
+      name:
+      annotations: {}
+    # Service Account for the hook-image-puller DaemonSet
+    serviceAccountImagePuller:
       create: true
       name:
       annotations: {}
   continuous:
     enabled: true
+    serviceAccount:
+      create: true
+      name:
+      annotations: {}
   pullProfileListImages: true
   extraImages: {}
   pause:
